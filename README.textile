@@ -21,8 +21,8 @@ h3. TO DO
 
 h3. Examples
 
-* http://github.com/kstephens/active_object_pattern_in_ruby
-* http://github.com/kstephens/abstracting_services_in_ruby
+* "Active Object Pattern in Ruby":http://github.com/kstephens/active_object_pattern_in_ruby
+* "Abstracting Services in Ruby":http://github.com/kstephens/abstracting_services_in_ruby
 
 h2. Copyright
 
