@@ -3,6 +3,7 @@
 require 'erb'
 require 'pp'
 require 'fileutils'
+require 'yaml'
 
 # Generates Slides for Scarlet from Ruby code.
 class LiterateRubySlideGenerator
@@ -117,6 +118,9 @@ class LiterateRubySlideGenerator
     @slide.superslide = parent_slide
     @slide.file_name = @file_name
     @slide.file_line = @file_line
+    if named_slide = @slides[@slide.name]
+      raise Error, "Slide named #{slide.name.inspect} already exists at #{named_slide.file_location}"
+    end
     @slides << @slide
     if parent_slide
       unless parent_slide.paused
@@ -131,20 +135,131 @@ class LiterateRubySlideGenerator
     @slide = @slide_stack.pop
   end
 
+  
+  ####################################################################
+
+
   def render_slides io
-    max_index = @slides.map{|s| s.index}.compact.sort[-1]
-    max_index ||= 1
-    @slides.each do | slide |
-      slide.index ||= (max_index += 1)
-    end
-    @slides.sort! { | a, b | a.index <=> b.index }
-    i = 0;
-    @slides.each do | slide |
-      $stderr.puts "#{"%3d" % (i += 1)} - @#{"%3d" % slide.index} - #{slide.title_string}"
+    i = 0
+    ordered_slides.each do | slide |
+      $stderr.puts "#{"%3d" % (i += 1)} - @#{"%3d" % slide.index} - #{slide.name.inspect}"
       slide.render_slide(io)
     end
   end
   
+
+  ####################################################################
+
+
+  def ordered_slides
+    @ordered_slides ||=
+      begin
+        # Get the assigned slide order!
+        assign_slide_order!
+        
+        # Find the starting point for unordered slides.
+        max_index = @slides.map{|s| s.index}.compact.sort[-1]
+        max_index ||= 0
+        
+        # Locate unordered slides, move them to the end.
+        @unordered_slides = [ ]
+        @slides.each do | slide |
+          unless slide.index
+            @unordered_slides << slide
+            slide.index ||= (max_index += 1)
+          end
+        end
+
+        # Sort slides by computed index.
+        @ordered_slides = @slides.sort { | a, b | a.index <=> b.index }
+        unless @unordered_slides.empty?
+          $stderr.puts "   WARNING: unordered slides (see #{riterate_yaml_file})"
+          @unordered_slides.each do | slide |
+            $stderr.puts "    #{slide.name.inspect}"
+          end
+        end
+
+        # Save the slide names.
+        riterate_yaml['unordered_slides'] = @unordered_slides.map{|s| s.name}
+        riterate_yaml_write! unless riterate_yaml['do_not_update']
+
+        @ordered_slides
+      end
+  end
+
+
+  def assign_slide_order!
+    @unknown_slides = [ ]
+
+    max_index = @slides.map{|s| s.index}.compact.sort[-1]
+    max_index ||= 0
+    (riterate_yaml['ordered_slides'] ||= [ ]).each do | slide_id |
+      slide_id.gsub!(/^\s+|\s+$/) if String === slide_id
+      if slide = slides[slide_id]
+        if slide.index
+          max_index = slide.index if max_index < slide.index
+        else
+          slide.index = (max_index += 1)
+        end
+      else
+        @unknown_slides << slide_id
+      end
+    end
+
+    riterate_yaml['unknown_slides'] = @unknown_slides
+    unless @unknown_slides.empty?
+      $stderr.puts "  WARNING: unknown slides:"
+      @unknown_slides.each do | slide_id |
+        $stderr.puts "    #{slide_id.inspect}"
+      end
+    end
+
+    riterate_yaml['ordered_slides'] = @slides.select { | s | s.index }.map { | s | s.name }
+  end
+
+  ####################################################################
+
+
+  def riterate_yaml_file
+    @riterate_yaml_file ||=
+      "#{slides_dir}/#{slides_basename}.riterate.yml"
+  end
+
+  def riterate_yaml file = riterate_yaml_file
+    @riterate_yaml ||=
+      begin
+        if File.exists?(file)
+          data = YAML::load(File.read(file))
+        else
+          $stderr.puts "  #{file} does not exist, creating default file."
+          data = { 'riterate' => { 'version' => '1.0', 'ordered_slides' => [ ], 'unordered_slides' => [ ] } }
+          @riterate_yaml = data
+          riterate_yaml_write!
+        end
+        raise TypeError, "Expected Hash at top-level" unless Hash === data
+        data = data['riterate']
+        raise TypeError, "Expected riterate at top-level" unless Hash === data
+        data
+      rescue Exception => exc
+        raise exc.class, "in #{file}: #{exc}"
+      end
+  end
+
+
+  def riterate_yaml_write! data = riterate_yaml
+    file = riterate_yaml_file
+    if File.exists?(file) && ! File.writable?(file)
+      $stderr.puts "  WARNING: #{file} is not writable."
+      return self
+    end
+
+    File.open(file, "w+") do | fh |
+      fh.write YAML::dump({ 'riterate' => riterate_yaml })
+    end
+
+    self
+  end
+
 
   def slides_basename
     @slides_basename ||=
@@ -177,6 +292,7 @@ class LiterateRubySlideGenerator
     erb.filename = erb_file
     textile = erb.result(binding)
 
+    textile.gsub!(/"([^"]+)":relative:([^\s]+)/){|x| %Q{<a href="#{$2}">#{$1}</a>}}
     textile.gsub!(/"":relative:([^\s]+)/){|x| %Q{<a href="#{$1}">#{$1}</a>}}
     textile.gsub!(/"":(https?:[^\s]+)/){|x| %Q{"#{$1}":#{$1}}}
 
@@ -234,12 +350,22 @@ class LiterateRubySlideGenerator
       @index = i && i.to_i
     end
 
+    def name
+      @name ||=
+        title_string.gsub(/^\s+|\s+$/, '').freeze
+    end
+
+    def title= x
+      @name = @title_string = nil
+      @title = x
+    end
+
     def pause!
-      $stderr.puts "  Slide #{title_string} pause!"
+      $stderr.puts "  Slide #{name.inspect} pause!"
       @paused = true
     end
     def resume!
-      $stderr.puts "  Slide #{title_string} resume!"
+      $stderr.puts "  Slide #{name.inspect} resume!"
       @paused = false
     end
 
@@ -367,8 +493,14 @@ class LiterateRubySlideGenerator
     end
 
 
+    def file_location
+      @file_location ||=
+        "#{file_name}:#{file_line}".freeze
+    end
+
     def title_string
-      "#{title || "SLIDE:#{file_name}:#{file_line}"}"
+      @title_string ||=
+        "#{title || "SLIDE:#{file_location}"}".freeze
     end
 
 
@@ -444,10 +576,10 @@ class LiterateRubySlideGenerator
 
 
     def capture_code_output!
-      rb = ".riterate/#{file_line}-capture.rb"
+      rb = ".riterate/#{File.basename(file_name)}-#{file_line}-capture.rb"
       file = "#{rb}.out"
 
-      $stderr.puts "  Capturing code output at #{file_name}:#{file_line}-#{file_line + code.size} for #{title_string.inspect} to #{file}"
+      $stderr.puts "  Capturing code output at #{file_location}-#{file_line + code.size} for Slide #{name.inspect} to #{file}"
 
       prog = [ ]
       prog << <<"END"
