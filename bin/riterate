@@ -2,8 +2,9 @@
 
 require 'erb'
 require 'pp'
+require 'fileutils'
 
-# Generates 
+# Generates Slides for Scarlet from Ruby code.
 class LiterateRubySlideGenerator
   EMPTY_HASH = { }.freeze
   EMPTY_ARRAY = [ ].freeze
@@ -12,8 +13,8 @@ class LiterateRubySlideGenerator
   module NamedList
     def [] key
       case key
-      when String
-        find { | e | e.name == key }
+      when String, Regexp
+        find { | e | key === e.name }
       else
         super
       end
@@ -191,11 +192,12 @@ class LiterateRubySlideGenerator
 
     slides = slides_dirname
 
-    scarlet = (ENV['SCARLET'] ||= File.expand_path("~/local/src/scarlet/bin/scarlet"))
+    scarlet = (ENV['SCARLET'] ||= File.expand_path("../../../scarlet/bin/scarlet", __FILE__))
 
     dirs = %w(stylesheets javascripts image)
     system "set -x; mkdir -p #{slides} #{dirs.map{|d| "#{slides}/#{d}"} * " "}"
 
+    system "set -x; #{scarlet} -f html -g #{slides} #{slides_textile}"
     system "set -x; #{scarlet} -f html #{slides_textile} > #{slides}/index.html"
 
     dirs.each do | d |
@@ -213,6 +215,7 @@ class LiterateRubySlideGenerator
     attr_accessor :owner, :superslide, :subslides
     attr_accessor :lines, :indention
     attr_accessor :capture_code_output, :code_output_lines_per_slide
+    attr_accessor :capture_code_output_lines_before
 
     attr_accessor :paused
 
@@ -441,10 +444,10 @@ class LiterateRubySlideGenerator
 
 
     def capture_code_output!
-      $stderr.puts "  Capturing code output at #{file_name}:#{file_line} for #{title_string.inspect}"
-
-      rb = "capture.rb"
+      rb = ".riterate/#{file_line}-capture.rb"
       file = "#{rb}.out"
+
+      $stderr.puts "  Capturing code output at #{file_name}:#{file_line}-#{file_line + code.size} for #{title_string.inspect} to #{file}"
 
       prog = [ ]
       prog << <<"END"
@@ -458,8 +461,10 @@ class LiterateRubySlideGenerator
 
 END
 
-      owner.lines[0 ... file_line].each do | lines |
-        prog << lines
+      if @capture_code_output_lines_before
+        owner.lines[0 ... file_line].each do | lines |
+          prog << lines
+        end
       end
 
       prog << <<"END"
@@ -479,8 +484,10 @@ END
       exit 0
 END
       prog = prog * "\n"
+      dir = File.dirname(rb)
+      FileUtils.mkdir(dir) unless File.directory?(dir)
       File.open(rb, "w+") { | fh | fh.puts prog }
-      system("ruby #{rb.inspect} >/dev/null 2>&1")
+      system("ruby #{rb.inspect}")
     
       File.read(file) rescue ''
     ensure
