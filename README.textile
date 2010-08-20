@@ -1,0 +1,33 @@
+h1. Riterate
+
+Riterate generates Literate Code slides from Ruby Comments.
+
+h2. Prerequisties
+
+Requires Scarlet -- see "http://github.com/kstephens/scarlet":"http://github.com/kstephens/scarlet"
+
+h2. Current Status
+
+* TOTALLY ALPHA, DOOD!
+
+h3. Step 1 – Install Scarlet
+
+<pre>sudo gem install scarlet</pre>
+<pre>sudo gem install riterate</pre>
+
+h3. Step 2 – Alter your code to use # !SLIDE comments.
+
+h3. TO DO
+
+h3. Examples
+
+* http://github.com/kstephens/active_object_pattern_in_ruby
+* http://github.com/kstephens/abstracting_services_in_ruby
+
+h2. Copyright
+
+Copyright (c) 2010 Kurt Stephens
+
+h2. License
+
+Riterate is released under the MIT License (see the LICENSE file).
