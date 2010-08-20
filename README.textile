@@ -4,7 +4,7 @@ Riterate generates Literate Code slides from Ruby Comments.
 
 h2. Prerequisties
 
-Requires Scarlet -- see "http://github.com/kstephens/scarlet":"http://github.com/kstephens/scarlet"
+Requires Scarlet -- see "http://github.com/kstephens/scarlet":http://github.com/kstephens/scarlet
 
 h2. Current Status
 
