@@ -154,6 +154,11 @@ class LiterateRubySlideGenerator
   def ordered_slides
     @ordered_slides ||=
       begin
+        # Generate any subslides (code output slides).
+        @slides.each do | slide |
+          slide.generate_subslides!
+        end
+
         # Get the assigned slide order!
         assign_slide_order!
         
@@ -175,7 +180,7 @@ class LiterateRubySlideGenerator
         unless @unordered_slides.empty?
           $stderr.puts "   WARNING: unordered slides (see #{riterate_yaml_file})"
           @unordered_slides.each do | slide |
-            $stderr.puts "    #{slide.name.inspect}"
+            $stderr.puts "  - #{slide.name.inspect}"
           end
         end
 
@@ -332,6 +337,7 @@ class LiterateRubySlideGenerator
     attr_accessor :lines, :indention
     attr_accessor :capture_code_output, :code_output_lines_per_slide
     attr_accessor :capture_code_output_lines_before
+    attr_accessor :code_output, :code_output_slide
 
     attr_accessor :paused
 
@@ -379,8 +385,36 @@ class LiterateRubySlideGenerator
       end
       @superslides
     end
+    
+    def create_subslide opts
+      opts.update(:owner => owner, 
+                  :superslide => self) 
+      ss = self.class.new(opts)
+      subslides << ss
+      owner.slides << ss
+      ss
+    end
+
+    def generate_subslides!
+      unless @generate_subslides
+        @generate_subslides = true
+        if ! code.empty? && capture_code_output && code_output
+          @code_output_slide = 
+            create_subslide(
+                            :title => "#{title_string} - Output", 
+                            :code_output_slide => true,
+                            :code_output => code_output)
+          $stderr.puts "    Generated slide: #{@code_output_slide.name.inspect}"
+        end
+      end
+      self
+    end
 
     def render_slide io
+      if code_output_slide == true
+        return render_code_output io
+      end
+
       # io.puts ""
       io.puts "!SLIDE"
       io.puts ""
@@ -418,34 +452,7 @@ class LiterateRubySlideGenerator
         render_slide_code io
         io.puts "@@@"
         io.puts ""
-
-        if code_output
-          lines_per_slide = code_output_lines_per_slide
-          $stderr.puts "  Code Output:"
-          code_output_lines = code_output.split("\n")
-          # $stderr.puts PP.pp(code_output_lines, '')
-          $stderr.puts "    #{code_output_lines.size} lines (#{lines_per_slide} lines / page)"
-          # Prevent empty pages
-          code_output_lines << EMPTY_STRING if code_output_lines.empty? 
-          page = 0
-          until code_output_lines.empty?
-            page += 1
-            page_lines = code_output_lines[0, lines_per_slide]
-            code_output_lines[0, lines_per_slide] = EMPTY_ARRAY
-            break if page_lines.empty?
-            $stderr.puts "    Page #{page} - #{page_lines.size} lines"
-            io.puts "!SLIDE"
-            io.puts ""
-            io.puts "h1. #{title_string} - Output #{page > 1 ? "- Page #{page}" : ""}"
-            io.puts ""
-            io.puts "@@@"
-            io.puts page_lines * "\n"
-            io.puts "@@@"
-            io.puts "MORE ..." unless code_output_lines.empty?
-            io.puts ""
-          end
-        end
-      end      
+      end
     end
 
 
@@ -477,6 +484,44 @@ class LiterateRubySlideGenerator
       end
     end
 
+    def render_code_output io
+      if code_output
+        lines_per_slide = code_output_lines_per_slide
+        $stderr.puts "  Code Output:"
+        code_output_lines = code_output.split("\n")
+        lines = [ ]
+        max_line_length = 80
+        code_output_lines.map! do | line |
+          while line.size > max_line_length
+            lines << (line[0 ... max_line_length] << "\\")
+            line = line[max_line_length .. -1]
+          end
+          lines << line
+        end
+        code_output_lines = lines
+        # $stderr.puts PP.pp(code_output_lines, '')
+        $stderr.puts "    #{code_output_lines.size} lines (#{lines_per_slide} lines / page)"
+        # Prevent empty pages
+        code_output_lines << EMPTY_STRING if code_output_lines.empty? 
+        page = 0
+        until code_output_lines.empty?
+          page += 1
+          page_lines = code_output_lines[0, lines_per_slide]
+          code_output_lines[0, lines_per_slide] = EMPTY_ARRAY
+          break if page_lines.empty?
+          $stderr.puts "    Page #{page} - #{page_lines.size} lines"
+          io.puts "!SLIDE"
+          io.puts ""
+          io.puts "h1. #{title_string} #{page > 1 ? "- Page #{page}" : ""}"
+          io.puts ""
+          io.puts "<pre class=\"code_output\">"
+          io.puts page_lines * "\n"
+          io.puts "</pre>"
+          io.puts "MORE ..." unless code_output_lines.empty?
+          io.puts ""
+        end
+      end
+    end
 
     def blank_line? line
       line && String === line && line =~ /^\s*$/
