@@ -7,6 +7,32 @@ require 'yaml'
 
 # Generates Slides for Scarlet from Ruby code.
 class LiterateRubySlideGenerator
+  module BlankLines
+    def blank_line? line
+      line && String === line && line =~ /^\s*$/
+    end
+    
+    def remove_leading_and_trailing_blank_lines! lines
+      remove_leading_blank_lines! lines
+      remove_trailing_blank_lines! lines
+    end
+    
+    def remove_leading_blank_lines! lines
+      while blank_line?(lines.first)
+        lines.shift
+      end
+      lines
+    end
+    
+    def remove_trailing_blank_lines! lines
+      while blank_line?(lines.last)
+        lines.pop
+      end
+      lines
+    end
+  end
+  include BlankLines
+
   EMPTY_HASH = { }.freeze
   EMPTY_ARRAY = [ ].freeze
   EMPTY_STRING = ''.freeze
@@ -332,6 +358,8 @@ class LiterateRubySlideGenerator
 
 
   class Slide
+    include BlankLines
+
     attr_accessor :index, :name, :file_name, :file_line, :title
     attr_accessor :owner, :superslide, :subslides
     attr_accessor :lines, :indention
@@ -417,14 +445,15 @@ class LiterateRubySlideGenerator
 
       # io.puts ""
       io.puts "!SLIDE"
+      io.puts "!TITLE #{title_string}"
       io.puts ""
       io.puts "h1. #{title_string}"
       io.puts ""
 
       # Remove blank lines at end.
-      begin
+      while blank_line?(lines.last)
         lines.pop
-      end while (last_line = lines.last) && String === last_line && last_line =~ /^\s*$/
+      end 
       
       # Remove multiple blank lines.
       (0 ... lines.size).each do | i |
@@ -489,6 +518,8 @@ class LiterateRubySlideGenerator
         lines_per_slide = code_output_lines_per_slide
         $stderr.puts "  Code Output:"
         code_output_lines = code_output.split("\n")
+        remove_leading_and_trailing_blank_lines! code_output_lines
+
         lines = [ ]
         max_line_length = 80
         code_output_lines.map! do | line |
@@ -503,16 +534,25 @@ class LiterateRubySlideGenerator
         $stderr.puts "    #{code_output_lines.size} lines (#{lines_per_slide} lines / page)"
         # Prevent empty pages
         code_output_lines << EMPTY_STRING if code_output_lines.empty? 
+
         page = 0
         until code_output_lines.empty?
           page += 1
-          page_lines = code_output_lines[0, lines_per_slide]
-          code_output_lines[0, lines_per_slide] = EMPTY_ARRAY
+          page_lines = [ ] 
+          until code_output_lines.empty? || page_lines.size >= lines_per_slide
+            line = code_output_lines.shift
+            page_lines << line
+            # Handle Form Feed.
+            break if line.gsub!(/\x1a/, '')
+          end
           break if page_lines.empty?
+
           $stderr.puts "    Page #{page} - #{page_lines.size} lines"
+          title_str = "#{title_string} #{page > 1 ? "- Page #{page}" : ""}"
           io.puts "!SLIDE"
+          io.puts "!TITLE #{title_str}"
           io.puts ""
-          io.puts "h1. #{title_string} #{page > 1 ? "- Page #{page}" : ""}"
+          io.puts "h1. #{title_str}"
           io.puts ""
           io.puts "<pre class=\"code_output\">"
           io.puts page_lines * "\n"
@@ -522,11 +562,6 @@ class LiterateRubySlideGenerator
         end
       end
     end
-
-    def blank_line? line
-      line && String === line && line =~ /^\s*$/
-    end
-
 
     def render_subslide io
       io.puts "#{indention}# #{title_string}"
@@ -589,8 +624,12 @@ class LiterateRubySlideGenerator
         line = lines.shift
         @code << line
       end
+      
+      remove_leading_and_trailing_blank_lines! @body
+      remove_leading_and_trailing_blank_lines! @code
+      
+      self
     end
-
 
     def ruby_block_start_line
       (@ruby_block_start_line ||= [ find_ruby_block_start_line ]).first
