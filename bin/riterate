@@ -51,6 +51,7 @@ class LiterateRubySlideGenerator
   attr_reader :slides, :lines
 
   attr_accessor :slides_dir, :slides_basename
+  attr_accessor :ruby_opts
 
   def initialize opts = nil
     opts ||= EMPTY_HASH
@@ -61,6 +62,7 @@ class LiterateRubySlideGenerator
     @lines = [ ]
     @slides_dir = '.'
     @slides_basename = nil
+    @ruby_opts = ""
     opts.each do | k, v |
       send(:"#{k}=", v)
     end
@@ -703,8 +705,9 @@ END
       dir = File.dirname(rb)
       FileUtils.mkdir(dir) unless File.directory?(dir)
       File.open(rb, "w+") { | fh | fh.puts prog }
-      system("ruby #{rb.inspect}")
-    
+      cmd = "ruby #{owner.ruby_opts} #{rb.inspect}"
+      $stderr.puts "+ #{cmd}"
+      system(cmd)
       File.read(file) rescue ''
     ensure
       #File.unlink(file) rescue nil
@@ -717,8 +720,13 @@ end
 ######################################################################
 
 obj = LiterateRubySlideGenerator.new
-ARGV.each do | file_name |
-  obj.process_file!(file_name)
+ARGV.each do | arg |
+  case arg
+  when /^--?([^=]+=)(.*)$/
+    obj.send(:"#{$1}", $2)
+  else
+    obj.process_file!(arg)
+  end
 end
 
 obj.render_slides_html!
