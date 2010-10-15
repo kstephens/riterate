@@ -241,10 +241,11 @@ class LiterateRubySlideGenerator
 
     riterate_yaml['unknown_slides'] = @unknown_slides
     unless @unknown_slides.empty?
-      $stderr.puts "  WARNING: unknown slides:"
+      $stderr.puts "  ERROR: unknown slides:"
       @unknown_slides.each do | slide_id |
         $stderr.puts "    #{slide_id.inspect}"
       end
+      raise "unknown slides"
     end
 
     riterate_yaml['ordered_slides'] = @slides.select { | s | s.index }.map { | s | s.name }
