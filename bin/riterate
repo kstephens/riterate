@@ -48,20 +48,29 @@ class LiterateRubySlideGenerator
     end
   end
 
-  attr_reader :slides, :lines
+  attr_reader :slides, :images
+  attr_reader :lines
 
   attr_accessor :slides_dir, :slides_basename
   attr_accessor :ruby_opts
 
   def initialize opts = nil
     opts ||= EMPTY_HASH
-    @slide_stack = [ ]
     @slide = nil
+    @slide_stack = [ ]
     @slides = [ ]
     @slides.extend NamedList
+
+    @image = nil
+    @image_stack = [ ]
+    @images = [ ]
+    @images.extend NamedList
+
     @lines = [ ]
+
     @slides_dir = '.'
     @slides_basename = nil
+
     @ruby_opts = ""
     opts.each do | k, v |
       send(:"#{k}=", v)
@@ -77,18 +86,19 @@ class LiterateRubySlideGenerator
   end
   
   def process_file_contents! file_contents
-    file_lines = file_contents.split("\n")
+    @file_lines = file_contents.split("\n")
     @file_line = 0
-    until file_lines.empty?
-      line = file_lines.shift
+    until @file_lines.empty?
+      line = @file_lines.shift
       @file_line += 1
       
       # $stderr.puts "#{@file_name}:#{"%5d" % @file_line}: #{line}"
       @lines << line
 
+      indention = kind = command = args = nil
       case line
-      when /^(\s*)\#\s*!SLIDE\s*(.*)/
-        indention, command = $1, $2
+      when /^(\s*)\#\s*!(SLIDE|PIC)\s*(.*)/
+        indention, kind, command = $1, $2, $3
         
         # $stderr.puts "#{@file_name}:#{"%5d" % @file_line}: command = #{command.inspect}"
 
@@ -101,6 +111,23 @@ class LiterateRubySlideGenerator
           args[k] = v
           ''
         end
+      end
+
+      case kind
+      when 'PIC'
+        case command
+        when /^end\b/i
+          while @image && indention <= @image.indention
+            end_image
+          end
+        when /^begin\b/i
+          args[:indention] = indention
+          start_image Pic, args
+        else
+          raise "invalid line #{line}"
+        end
+        
+      when 'SLIDE'
         # $stderr.puts "#{@file_name}:#{"%5d" % @file_line}: args = #{args.inspect}" if ! args.empty?
         # $stderr.puts "#{@file_name}:#{"%5d" % @file_line}: command = #{command.inspect}"
 
@@ -127,7 +154,14 @@ class LiterateRubySlideGenerator
           raise "#{@file_name}:#{@file_line}: unknown command #{line}"
         end
       else
-        if @slide 
+        case
+        when @image
+           if ! @image.title_ && line =~ /^\s*#\s+(.+)/
+             @image.title = $1
+           else
+             @image.lines << line
+           end
+        when @slide 
            if ! @slide.title && line =~ /^\s*#\s+(.+)/
              @slide.title = $1
            else
@@ -163,11 +197,42 @@ class LiterateRubySlideGenerator
     @slide = @slide_stack.pop
   end
 
+
+  def start_image cls, opts
+    @image_stack.push @image
+    parent_slide = @slide
+    @image = cls.new opts
+    @image.owner = self
+    @image.superslide = parent_slide
+    @image.file_name = @file_name
+    @image.file_line = @file_line
+    @image.index = @images.size + 1
+    if named_image = @images[@image.name]
+      raise Error, "Image named #{@image.name.inspect} already exists at #{named_image.file_location}"
+    end
+    @images << @image
+    @image
+  end
+
+  def end_image
+    @file_lines.unshift "#{@image.indention}# #{@image.image_tag}\n"
+    @image = @image_stack.pop
+  end
+
   
   ####################################################################
 
 
   def render_slides io
+    i = 0
+    unless images.empty?
+      $stderr.puts "Images:"
+      images.each do | image |
+        $stderr.puts "#{"%3d" % (i += 1)} - @#{"%3d" % image.index} - #{image.name.inspect}"
+        image.generate_image!
+      end
+    end
+
     i = 0
     ordered_slides.each do | slide |
       $stderr.puts "#{"%3d" % (i += 1)} - @#{"%3d" % slide.index} - #{slide.name.inspect}"
@@ -228,6 +293,7 @@ class LiterateRubySlideGenerator
     max_index ||= 0
     (riterate_yaml['ordered_slides'] ||= [ ]).each do | slide_id |
       slide_id.gsub!(/^\s+|\s+$/) if String === slide_id
+      # $stderr.puts "  slide_id = #{slide_id.inspect}"
       if slide = slides[slide_id]
         if slide.index
           max_index = slide.index if max_index < slide.index
@@ -348,27 +414,30 @@ class LiterateRubySlideGenerator
     system "set -x; mkdir -p #{slides} #{dirs.map{|d| "#{slides}/#{d}"} * " "}"
 
     system "set -x; #{scarlet} -f html -g #{slides} #{slides_textile}"
-    system "set -x; #{scarlet} -f html #{slides_textile} > #{slides}/index.html"
+
+    slides_index_html = "#{slides}/index.html"
+    system "set -x; #{scarlet} -f html #{slides_textile} > #{slides_index_html}"
 
     dirs.each do | d |
-      system "set -x; cp -p #{d}/*.* #{slides}/#{d}/" if File.directory?(d)
+      src = d
+      system "set -x; cp -p #{src}/*.* #{slides}/#{d}/" if File.directory?(src)
+      src = ".riterate/#{d}"
+      system "set -x; cp -p #{src}/*.* #{slides}/#{d}/" if File.directory?(src)
     end
 
     $stderr.puts "Created #{slides}"
+    system("open #{slides_index_html.inspect}")
 
     self
   end
 
 
-  class Slide
+  class Element
     include BlankLines
 
     attr_accessor :index, :name, :file_name, :file_line, :title
     attr_accessor :owner, :superslide, :subslides
     attr_accessor :lines, :indention
-    attr_accessor :capture_code_output, :code_output_lines_per_slide
-    attr_accessor :capture_code_output_lines_before
-    attr_accessor :code_output, :code_output_slide
 
     attr_accessor :paused
 
@@ -376,11 +445,10 @@ class LiterateRubySlideGenerator
       @superslide = nil
       @subslides = [ ]
       @lines = [ ]
-      @code_output_lines_per_slide = 15
+      @paused = false
       opts.each do | k, v |
         send(:"#{k}=", v)
       end
-      @paused = false
     end
 
     def index= i
@@ -392,17 +460,31 @@ class LiterateRubySlideGenerator
         title_string.gsub(/^\s+|\s+$/, '').freeze
     end
 
+    def title_
+      @title
+    end
+
+    def title_string
+      @title_string ||=
+        "#{title || "#{self.class.name.sub(/.*::/, '')}:#{file_location}"}".freeze
+    end
+
     def title= x
       @name = @title_string = nil
       @title = x
     end
 
+    def file_location
+      @file_location ||=
+        "#{file_name}:#{file_line}".freeze
+    end
+
     def pause!
-      $stderr.puts "  Slide #{name.inspect} pause!"
+      $stderr.puts "  #{self.class} #{name.inspect} pause!"
       @paused = true
     end
     def resume!
-      $stderr.puts "  Slide #{name.inspect} resume!"
+      $stderr.puts "  #{self.class} #{name.inspect} resume!"
       @paused = false
     end
 
@@ -417,6 +499,19 @@ class LiterateRubySlideGenerator
       @superslides
     end
     
+  end # class Element
+
+
+  class Slide < Element
+    attr_accessor :capture_code_output, :code_output_lines_per_slide
+    attr_accessor :capture_code_output_lines_before
+    attr_accessor :code_output, :code_output_slide
+
+    def initialize opts
+      @code_output_lines_per_slide = 15
+      super
+    end
+
     def create_subslide opts
       opts.update(:owner => owner, 
                   :superslide => self) 
@@ -576,17 +671,6 @@ class LiterateRubySlideGenerator
     end
 
 
-    def file_location
-      @file_location ||=
-        "#{file_name}:#{file_line}".freeze
-    end
-
-    def title_string
-      @title_string ||=
-        "#{title || "SLIDE:#{file_location}"}".freeze
-    end
-
-
     def body
       return @body if @body
       extract_body_and_code!
@@ -714,7 +798,119 @@ END
       #File.unlink(file) rescue nil
       #File.unlink(rb) rescue nil
     end
-  end
+  end # class Slide
+
+
+  class Pic < Element
+    attr_accessor :pic_code
+    attr_accessor :pic_file, :svg_file
+
+    def title
+      @title ||=
+        "pic#{index}"
+    end
+
+    def pic_code
+      @pic_code ||=
+        lines.map{|l| l.sub(/^#{indention}#/, '')}.join("\n")
+    end
+
+    def image_tag
+      @image_tag ||=
+        %Q{<object class="image svg" data="#{image_path}" />}
+    end
+
+    def image_path
+      @image_path ||=
+        svg_file.sub(Regexp.new("^#{out_dir}/"), '').freeze
+    end
+
+    def generate_image!
+      FileUtils.mkdir_p(File.dirname(pic_file))
+      File.open(pic_file, "w+") do | out |
+        # $stderr.puts "pic_document:\n#{pic_document}\n"
+        out.write pic_document
+      end
+
+      FileUtils.mkdir_p(File.dirname(svg_file))
+      cmd = "set -x; #{pic2plot_cmd} #{pic_file.inspect} > #{svg_file.inspect}"
+      $stderr.puts "  Generate PIC #{title.inspect} -> SVG"
+      system(cmd) or raise "Command #{cmd} failed"
+
+      tmp = "#{svg_file}.tmp"
+      File.open(svg_file) do | i |
+        File.open(tmp, "w+") do | o |
+          until i.eof?
+            l = i.readline
+            case l
+            when /^<svg /
+              l.sub!(/ width="[^"]+"/, '')
+              l.sub!(/ height="[^"]+"/, '')
+              l.sub!(/ preserveAspectRatio="[^"]+"/i, ' preserveAspectRatio="xMinYMin"')
+            #when /^<rect id="background" /
+            #  l = EMPTY_STRING
+            #when /^<g id="content" /
+            #  l.sub!(/ transform="[^"]+"/, ' transform="scale(1, -1) "')
+            end
+            o.write l
+          end
+          o.write i.read
+        end
+      end
+      File.rename(tmp, svg_file)
+
+      # system("open #{svg_file.inspect}")
+      #exit 1
+
+      self
+    end
+
+    def out_dir
+      @out_dir ||=
+        ".riterate"
+    end
+
+    def pic_file
+      @pic_file ||=
+        ".riterate/image/#{name.to_s.gsub(/[^-_a-z0-9]/i, '-')}.pic".freeze
+    end
+
+    def ps_file
+      @ps_file ||= 
+        pic_file.sub(/\.pic$/, '.ps').freeze
+    end
+
+    def eps_file
+      @eps_file ||= 
+        ps_file.sub(/\.ps$/, '.eps').freeze
+    end
+
+    def svg_file
+      @svg_file ||= 
+        pic_file.sub(/\.pic$/, '.svg').freeze
+    end
+
+    def pic2plot_cmd 
+      @pic2plot_cmd ||=
+        "pic2plot -Tsvg --portable-output --page-size 800x600 --font-name HersheySans-Bold #{pic2plot_opts}".freeze
+    end
+
+    def pic2plot_opts
+      @pic2plot_opts ||=
+        # "--font-size 0.01".freeze
+        "".freeze
+    end
+
+    def pic_document
+      @pic_document ||=
+        <<"END"
+.PS 7.75i 7.75i
+#{pic_code}
+.PE
+END
+    end
+  end # class
+
 end
 
 
