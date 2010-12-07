@@ -30,6 +30,18 @@ class LiterateRubySlideGenerator
       end
       lines
     end
+
+    def remove_multiple_blank_lines! lines
+      i = 0
+      while i + 1 < lines.size
+        while blank_line?(lines[i]) && blank_line?(lines[i + 1])
+          lines.delete_at(i)
+          # $stderr.puts "  rmbl!: i = #{i} lines.size = #{lines.size}"
+        end
+        i += 1
+      end
+    end
+
   end
   include BlankLines
 
@@ -292,7 +304,7 @@ class LiterateRubySlideGenerator
     max_index = @slides.map{|s| s.index}.compact.sort[-1]
     max_index ||= 0
     (riterate_yaml['ordered_slides'] ||= [ ]).each do | slide_id |
-      slide_id.gsub!(/^\s+|\s+$/) if String === slide_id
+      slide_id.gsub!(/^\s+|\s+$/, '') if String === slide_id
       # $stderr.puts "  slide_id = #{slide_id.inspect}"
       if slide = slides[slide_id]
         if slide.index
@@ -426,7 +438,7 @@ class LiterateRubySlideGenerator
     end
 
     $stderr.puts "Created #{slides}"
-    system("open #{slides_index_html.inspect}")
+    #system("open #{slides_index_html.inspect}")
 
     self
   end
@@ -506,9 +518,11 @@ class LiterateRubySlideGenerator
     attr_accessor :capture_code_output, :code_output_lines_per_slide
     attr_accessor :capture_code_output_lines_before
     attr_accessor :code_output, :code_output_slide
+    attr_accessor :highlight_code_output
 
     def initialize opts
       @code_output_lines_per_slide = 15
+      @highlight_code_output = /^\*\*\* .*$/
       super
     end
 
@@ -537,6 +551,11 @@ class LiterateRubySlideGenerator
     end
 
     def render_slide io
+      unless @lines_prepared
+        @lines_prepared = true
+        remove_leading_and_trailing_blank_lines! lines
+      end
+
       if code_output_slide == true
         return render_code_output io
       end
@@ -548,29 +567,22 @@ class LiterateRubySlideGenerator
       io.puts "h1. #{title_string}"
       io.puts ""
 
-      # Remove blank lines at end.
-      while blank_line?(lines.last)
-        lines.pop
-      end 
-      
-      # Remove multiple blank lines.
-      (0 ... lines.size).each do | i |
-        if blank_line?(lines[i]) && blank_line?(lines[i + 1])
-          lines.delete(i)
-        end
-      end
-
       # Render slide body.
       in_ruby = false
       body.each do | line |
         if (! ! line =~ /^\s\s/) != ! ! in_ruby
           in_ruby = ! in_ruby
-          io.puts "" if in_ruby
-          io.puts "@@@ ruby"
-          io.puts "" if ! in_ruby
+          if in_ruby
+            io.puts "" 
+            io.puts "@@@ ruby"
+          else
+            io.puts "@@@"
+            io.puts ""
+          end
         end
         io.puts line
       end
+      io.puts "@@@" if in_ruby
 
       io.puts ""
 
@@ -633,12 +645,17 @@ class LiterateRubySlideGenerator
         # Prevent empty pages
         code_output_lines << EMPTY_STRING if code_output_lines.empty? 
 
+        code_output_tag = lambda { |cls| %Q{<pre class="code_output#{cls}">}}
         page = 0
         until code_output_lines.empty?
           page += 1
           page_lines = [ ] 
           until code_output_lines.empty? || page_lines.size >= lines_per_slide
             line = code_output_lines.shift
+            if @highlight_code_output && @highlight_code_output === line
+              line = 
+              %Q{</pre>#{code_output_tag.call(:_highlight)}#{line}</pre>#{code_output_tag.call(nil)}}
+            end
             page_lines << line
             # Handle Form Feed.
             break if line.gsub!(/\x1a/, '')
@@ -652,7 +669,7 @@ class LiterateRubySlideGenerator
           io.puts ""
           io.puts "h1. #{title_str}"
           io.puts ""
-          io.puts "<pre class=\"code_output\">"
+          io.puts code_output_tag.call(nil)
           io.puts page_lines * "\n"
           io.puts "</pre>"
           io.puts "MORE ..." unless code_output_lines.empty?
@@ -689,18 +706,29 @@ class LiterateRubySlideGenerator
       @body = [ ]
       @code = [ ]
       comment_indent = "\\s*"
-      first_comment_indent = 0
+      first_comment_indent = nil
 
       lines = self.lines.dup
+      remove_leading_and_trailing_blank_lines! lines
+
       until lines.empty?
         line = lines.shift
         break unless String === line
         case line
-        when /^#{indention}#(#{comment_indent})(.*)/
-          unless first_comment_indent
-            first_comment_indent = comment_indent = $1
-          end
+        when /^(#{indention})#(\s*)$/
           @body << $2
+        when /^(#{indention})#(#{comment_indent})(.+)$/
+          if false # title == 'Using a Client Proxy'
+            $stderr.puts "indention = #{indention.inspect}"
+            $stderr.puts "comment_indent = #{comment_indent.inspect}"
+            $stderr.puts "$1 = #{$1.inspect}"
+            $stderr.puts "$2 = #{$2.inspect}"
+            $stderr.puts "$3 = #{$3.inspect}"
+          end
+          unless first_comment_indent
+            first_comment_indent = comment_indent = $2
+          end
+          @body << $3
         else
           @code << line
           break
@@ -715,6 +743,8 @@ class LiterateRubySlideGenerator
       remove_leading_and_trailing_blank_lines! @body
       remove_leading_and_trailing_blank_lines! @code
       
+      remove_multiple_blank_lines! @code
+
       self
     end
 
@@ -749,6 +779,7 @@ class LiterateRubySlideGenerator
     def capture_code_output!
       rb = ".riterate/#{File.basename(file_name)}-#{file_line}-capture.rb"
       file = "#{rb}.out"
+      rb_error = "#{rb}.err"
 
       $stderr.puts "  Capturing code output at #{file_location}-#{file_line + code.size} for Slide #{name.inspect} to #{file}"
 
@@ -790,10 +821,14 @@ END
       dir = File.dirname(rb)
       FileUtils.mkdir(dir) unless File.directory?(dir)
       File.open(rb, "w+") { | fh | fh.puts prog }
-      cmd = "ruby #{owner.ruby_opts} #{rb.inspect}"
+      cmd = "ruby #{owner.ruby_opts} #{rb.inspect} 2>#{rb_error.inspect}"
       $stderr.puts "+ #{cmd}"
       system(cmd)
-      File.read(file) rescue ''
+
+      result = ''
+      result << (File.read(rb_error) rescue '')
+      result << (File.read(file) rescue '')
+      result
     ensure
       #File.unlink(file) rescue nil
       #File.unlink(rb) rescue nil
@@ -815,9 +850,12 @@ END
         lines.map{|l| l.sub(/^#{indention}#/, '')}.join("\n")
     end
 
+    def image_size
+    end
+
     def image_tag
       @image_tag ||=
-        %Q{<object class="image svg" data="#{image_path}" />}
+        %Q{<object class="image svg" data="#{image_path}" width="90%" height="67%" />}
     end
 
     def image_path
@@ -844,13 +882,17 @@ END
             l = i.readline
             case l
             when /^<svg /
-              l.sub!(/ width="[^"]+"/, '')
-              l.sub!(/ height="[^"]+"/, '')
+              # l.sub!(/ width="[^"]+"/, '')
+              l.sub!(/( height=")([\d.]+)(\w+)(")/) { | m | "#{$1}#{$2.to_i * 3 / 4}#{$3}#{$4}" }
               l.sub!(/ preserveAspectRatio="[^"]+"/i, ' preserveAspectRatio="xMinYMin"')
             #when /^<rect id="background" /
             #  l = EMPTY_STRING
-            #when /^<g id="content" /
-            #  l.sub!(/ transform="[^"]+"/, ' transform="scale(1, -1) "')
+            when /^<g id="content" /
+              l.sub!(/ transform="[^"]+"/) do | m |
+                m.sub(/(translate\()([^,]+),([^,]+)(\))/) do | m |
+                  "#{$1}#{$2},#{$3.to_f - 0.25}#{$4}"
+                end
+              end
             end
             o.write l
           end
@@ -859,8 +901,8 @@ END
       end
       File.rename(tmp, svg_file)
 
-      # system("open #{svg_file.inspect}")
-      #exit 1
+      system("open #{svg_file.inspect}") if ENV['RITERATE_OPEN_PIC']
+      # exit 1
 
       self
     end
