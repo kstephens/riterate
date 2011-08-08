@@ -855,7 +855,7 @@ END
 
     def image_tag
       @image_tag ||=
-        %Q{<object class="image svg" data="#{image_path}" width="90%" height="67%" />}
+        %Q{<object class="image svg" data="#{image_path}" width="90%" height="67%" ></object>}
     end
 
     def image_path
