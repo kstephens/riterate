@@ -304,6 +304,7 @@ class LiterateRubySlideGenerator
     max_index ||= 0
     (riterate_yaml['ordered_slides'] ||= [ ]).each do | slide_id |
       slide_id.gsub!(/^\s+|\s+$/, '') if String === slide_id
+      # next if slide_id =~ / - Output$/ # Disable Output slides
       # $stderr.puts "  slide_id = #{slide_id.inspect}"
       if slide = slides[slide_id]
         if slide.index
@@ -774,6 +775,7 @@ class LiterateRubySlideGenerator
     def code_output
       @code_output ||=
         capture_code_output &&
+        # false && # Disable Output slides.
         capture_code_output!
     end
 
