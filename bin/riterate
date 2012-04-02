@@ -569,7 +569,8 @@ class LiterateRubySlideGenerator
       # Render slide body.
       in_ruby = false
       body.each do | line |
-        if (! ! line =~ /^\s\s/) != ! ! in_ruby
+        # $stderr.puts "#{in_ruby}: #{line.inspect}"
+        if (! ! (line =~ /^\s\s/)) != ! ! in_ruby
           in_ruby = ! in_ruby
           if in_ruby
             io.puts "" 
